@@ -743,6 +743,7 @@ static int is_local_named_pipe_path(const char *filename)
 
 int mingw_open (const char *filename, int oflags, ...)
 {
+	static int append_atomically = -1;
 	typedef int (*open_fn_t)(wchar_t const *wfilename, int oflags, ...);
 	va_list args;
 	unsigned mode;
@@ -759,7 +760,13 @@ int mingw_open (const char *filename, int oflags, ...)
 		return -1;
 	}
 
-	if ((oflags & O_APPEND) && !is_local_named_pipe_path(filename))
+	if (append_atomically < 0 &&
+	    (!the_repository || git_config_get_bool("windows.appendatomically",
+						    &append_atomically)))
+		append_atomically = 1;
+
+	if (append_atomically && (oflags & O_APPEND) &&
+	    !is_local_named_pipe_path(filename))
 		open_fn = mingw_open_append;
 	else
 		open_fn = _wopen;
@@ -908,8 +915,15 @@ ssize_t mingw_write(int fd, const void *buf, size_t len)
 		HANDLE h = (HANDLE) _get_osfhandle(fd);
 		if (GetFileType(h) == FILE_TYPE_PIPE)
 			errno = EPIPE;
-		else
+		else {
 			errno = EINVAL;
+			/*
+			* default atomatic append causes such error on network file system,
+			* in such case, it should be turned off via config.
+			*/
+			fprintf(stderr, "Invalid write operation detected, "
+			    "you may try to set config windows.appendAtomically to 0.\n");
+		}
 	}
 
 	return result;
