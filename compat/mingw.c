@@ -741,6 +741,48 @@ static int is_local_named_pipe_path(const char *filename)
 		filename[9]);
 }
 
+static int is_local_disk_file(const char *filename)
+{
+	wchar_t wpath[MAX_LONG_PATH];
+	wchar_t wfullpath[MAX_LONG_PATH];
+	size_t windex;
+
+	if (is_local_named_pipe_path(filename))
+		return 0;
+
+	/*
+	 * Do everything in wide chars because the drive letter might be
+	 * a multi-byte sequence.  See win32_has_dos_drive_prefix().
+	 */
+	if (xutftowcs_long_path(wpath, filename) < 0)
+		return 0;
+
+	/*
+	 * GetDriveTypeW() requires a final slash.
+	 */
+	windex = wcslen(wpath) - 1;
+	while (windex > 0) {
+		if (is_dir_sep(wpath[windex]))
+			break;
+		windex--;
+	}
+	wpath[windex++] = L'\\';
+	wpath[windex] = 0;
+
+	/*
+	 * Normalize the path.  If nothing else, this converts forward
+	 * slashes to backslashes.  This is essential to get GetDriveTypeW()
+	 * correctly handle some UNC "\\server\share\..." paths.
+	 */
+	if (!GetFullPathNameW(wpath, MAX_LONG_PATH, wfullpath, NULL))
+		return 0;
+
+	if (GetDriveTypeW(wfullpath) == DRIVE_REMOTE)
+		return 0;
+
+	return 1;
+}
+
 int mingw_open (const char *filename, int oflags, ...)
 {
 	typedef int (*open_fn_t)(wchar_t const *wfilename, int oflags, ...);
@@ -759,7 +801,7 @@ int mingw_open (const char *filename, int oflags, ...)
 		return -1;
 	}
 
-	if ((oflags & O_APPEND) && !is_local_named_pipe_path(filename))
+	if ((oflags & O_APPEND) && is_local_disk_file(filename))
 		open_fn = mingw_open_append;
 	else
 		open_fn = _wopen;
